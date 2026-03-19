@@ -15,6 +15,24 @@ from .db import get_collection
 
 _ROOT_PATH = os.environ.get("ROOT_PATH", "/legislation-api")
 
+_OCD_PREFIX = "ocd-jurisdiction/country:us/state:"
+_OCD_SUFFIX = "/government"
+
+
+def _normalize_jurisdiction(value: str) -> str:
+    """Accept a 2-letter state abbreviation OR a full OCD jurisdiction ID.
+
+    Examples:
+      "MI"  → "ocd-jurisdiction/country:us/state:mi/government"
+      "ocd-jurisdiction/country:us/state:mi/government" → unchanged
+    """
+    v = value.strip()
+    if v.startswith("ocd-jurisdiction/"):
+        return v
+    if len(v) == 2 and v.isalpha():
+        return f"{_OCD_PREFIX}{v.lower()}{_OCD_SUFFIX}"
+    return v
+
 app = FastAPI(
     title="Legislation API",
     description="Query US state legislation synced from OpenStates. Authenticate with `X-API-Key` header.",
@@ -88,7 +106,7 @@ def list_legislation(
 
     filt: dict[str, Any] = {}
     if jurisdiction:
-        filt["jurisdictionId"] = jurisdiction
+        filt["jurisdictionId"] = _normalize_jurisdiction(jurisdiction)
     if session:
         filt["session"] = session
     if classification:
