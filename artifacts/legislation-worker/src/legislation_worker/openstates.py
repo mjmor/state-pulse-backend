@@ -21,11 +21,6 @@ BILL_INCLUDE = [
     "sponsorships",
     "versions",
     "sources",
-    "documents",
-    "votes",
-    "related_bills",
-    "other_titles",
-    "other_identifiers",
 ]
 
 _DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
@@ -75,7 +70,7 @@ def fetch_bills_since(
     is handled automatically by following the ``meta.page`` cursor until all
     pages have been consumed.
     """
-    since_str = updated_since.strftime("%Y-%m-%dT%H:%M:%S")
+    since_str = updated_since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     page = 1
 
     with _make_client() as client:
@@ -96,16 +91,7 @@ def fetch_bills_since(
                 since_str,
             )
 
-            try:
-                data = _get_with_retry(client, "/bills", params)
-            except Exception as exc:
-                logger.error(
-                    "Failed to fetch bills for %s page %d: %s",
-                    jurisdiction,
-                    page,
-                    exc,
-                )
-                return
+            data = _get_with_retry(client, "/bills", params)
 
             results: list[dict[str, Any]] = data.get("results", [])
             if not results:

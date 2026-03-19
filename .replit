@@ -24,48 +24,18 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Start MongoDB"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Start Redis"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Start Celery"
-
-[[workflows.workflow]]
-name = "Start MongoDB"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "bash artifacts/legislation-worker/run_mongodb.sh"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "Start Redis"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "bash artifacts/legislation-worker/run_redis.sh"
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [[workflows.workflow]]
 name = "Start Celery"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "bash artifacts/legislation-worker/run_worker.sh"
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [agent]
 stack = "PNPM_WORKSPACE"

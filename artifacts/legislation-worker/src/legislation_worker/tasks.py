@@ -37,18 +37,19 @@ def sync_legislation(self) -> dict:
         logger.info("Syncing jurisdiction: %s", jurisdiction)
 
         try:
-            for bill in fetch_bills_since(jurisdiction, updated_since):
+            bills = fetch_bills_since(jurisdiction, updated_since)
+            for bill in bills:
                 fetched += 1
+                bill_id = bill.get("id", "unknown")
                 try:
                     if upsert_legislation(collection, bill):
                         upserted += 1
                 except Exception as exc:
-                    bill_id = bill.get("id", "unknown")
-                    msg = f"{jurisdiction}/{bill_id}: {exc}"
+                    msg = f"upsert {jurisdiction}/{bill_id}: {exc}"
                     logger.error("Upsert failed — %s", msg)
                     errors.append(msg)
         except Exception as exc:
-            msg = f"fetch error for {jurisdiction}: {exc}"
+            msg = f"fetch error for {jurisdiction}: {type(exc).__name__}: {exc}"
             logger.error(msg)
             errors.append(msg)
 
