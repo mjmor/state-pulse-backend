@@ -130,9 +130,11 @@ A standalone Python project at `artifacts/legislation-worker/` that runs a Celer
 
 | Workflow | Command | Purpose |
 |---|---|---|
-| `Start Celery` | `run_worker.sh` | Starts MongoDB → Redis → Celery Beat + Worker in order, with health checks between each step |
+| `Start MongoDB` | `run_mongodb.sh` | Starts `mongod` on `localhost:27017`, data in `data/mongodb/` |
+| `Start Redis` | `run_redis.sh` | Starts `redis-server` on `localhost:6379`, data in `data/redis/` |
+| `Start Celery` | `run_worker.sh` | Starts Celery Beat + Worker; health-checks MongoDB (pymongo ping) and Redis (`redis-cli ping`) before proceeding |
 
-`run_worker.sh` uses `pymongo` ping and `redis-cli ping` to gate each service before proceeding, so Celery always starts after its dependencies are healthy.
+**Start order**: `Start MongoDB` → `Start Redis` → `Start Celery`
 
 ### Configuration (env vars / secrets)
 

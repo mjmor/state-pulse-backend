@@ -100,15 +100,15 @@ def fetch_bills_since(
             yield from results
 
             meta: dict[str, Any] = data.get("pagination", {})
-            total_pages: int = meta.get("total_pages", 1)
+            max_page: int = meta.get("max_page", 1)
             logger.info(
                 "Fetched %d bills from %s (page %d/%d)",
                 len(results),
                 jurisdiction,
                 page,
-                total_pages,
+                max_page,
             )
 
-            if page >= total_pages:
+            if page >= max_page:
                 break
             page += 1
