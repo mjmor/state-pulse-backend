@@ -2,28 +2,37 @@
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from .celery_app import app
-from .config import JURISDICTIONS, SYNC_LOOKBACK_HOURS
+from .config import JURISDICTIONS, SUBJECT_FILTER, SYNC_LOOKBACK
 from .db import ensure_indexes, get_collection, upsert_legislation
-from .openstates import fetch_bills_since
+from .openstates import fetch_bills
 
 logger = logging.getLogger(__name__)
 
 
-@app.task(bind=True, name="legislation_worker.tasks.sync_legislation", max_retries=3)
-def sync_legislation(self) -> dict:
-    """Fetch bills updated in the last SYNC_LOOKBACK_HOURS and upsert to MongoDB.
+def _resolve_updated_since(lookback: str) -> datetime | None:
+    """Convert a lookback setting to a datetime (or None for 'all time').
 
-    Runs once per day via Celery Beat (configured in celeryconfig.py).
+    Args:
+        lookback: Either "all" (no date filter) or an integer number of hours
+                  as a string (e.g. "24", "168").
+
+    Returns:
+        A timezone-aware datetime, or None if lookback is "all".
     """
-    updated_since = datetime.now(tz=timezone.utc) - timedelta(hours=SYNC_LOOKBACK_HOURS)
-    logger.info(
-        "Starting sync — updated_since=%s jurisdictions=%s",
-        updated_since.isoformat(),
-        JURISDICTIONS,
-    )
+    if lookback.strip().lower() == "all":
+        return None
+    return datetime.now(tz=timezone.utc) - timedelta(hours=int(lookback))
 
+
+def _run_sync(
+    jurisdictions: list[str],
+    updated_since: datetime | None,
+    subject: str | None,
+) -> dict[str, Any]:
+    """Core sync logic — upserts bills from OpenStates into MongoDB."""
     collection = get_collection()
     ensure_indexes(collection)
 
@@ -31,14 +40,18 @@ def sync_legislation(self) -> dict:
     total_upserted = 0
     errors: list[str] = []
 
-    for jurisdiction in JURISDICTIONS:
+    for jurisdiction in jurisdictions:
         fetched = 0
         upserted = 0
-        logger.info("Syncing jurisdiction: %s", jurisdiction)
+        logger.info(
+            "Syncing jurisdiction=%s updated_since=%s subject=%s",
+            jurisdiction,
+            updated_since.isoformat() if updated_since else "ALL",
+            subject or "ANY",
+        )
 
         try:
-            bills = fetch_bills_since(jurisdiction, updated_since)
-            for bill in bills:
+            for bill in fetch_bills(jurisdiction, updated_since=updated_since, subject=subject):
                 fetched += 1
                 bill_id = bill.get("id", "unknown")
                 try:
@@ -62,9 +75,10 @@ def sync_legislation(self) -> dict:
         total_fetched += fetched
         total_upserted += upserted
 
-    summary = {
-        "updated_since": updated_since.isoformat(),
-        "jurisdictions": len(JURISDICTIONS),
+    summary: dict[str, Any] = {
+        "updated_since": updated_since.isoformat() if updated_since else "ALL",
+        "subject": subject or "ANY",
+        "jurisdictions": len(jurisdictions),
         "total_fetched": total_fetched,
         "total_upserted": total_upserted,
         "errors": len(errors),
@@ -72,3 +86,42 @@ def sync_legislation(self) -> dict:
     }
     logger.info("Sync complete: %s", summary)
     return summary
+
+
+@app.task(bind=True, name="legislation_worker.tasks.sync_legislation", max_retries=3)
+def sync_legislation(self) -> dict:
+    """Scheduled daily sync — uses SYNC_LOOKBACK and SUBJECT_FILTER from config."""
+    updated_since = _resolve_updated_since(SYNC_LOOKBACK)
+    logger.info(
+        "Starting scheduled sync — lookback=%s updated_since=%s jurisdictions=%s subject=%s",
+        SYNC_LOOKBACK,
+        updated_since.isoformat() if updated_since else "ALL",
+        JURISDICTIONS,
+        SUBJECT_FILTER or "ANY",
+    )
+    return _run_sync(JURISDICTIONS, updated_since, SUBJECT_FILTER)
+
+
+@app.task(bind=True, name="legislation_worker.tasks.one_time_sync", max_retries=0)
+def one_time_sync(
+    self,
+    jurisdictions: list[str],
+    lookback: str = "all",
+    subject: str | None = None,
+) -> dict:
+    """One-off sync with explicit parameters.
+
+    Args:
+        jurisdictions: List of state abbreviations to sync.
+        lookback: "all" or number of hours as a string (e.g. "168").
+        subject: Policy area filter (e.g. "energy"). None means no filter.
+    """
+    updated_since = _resolve_updated_since(lookback)
+    logger.info(
+        "Starting one-time sync — jurisdictions=%s lookback=%s updated_since=%s subject=%s",
+        jurisdictions,
+        lookback,
+        updated_since.isoformat() if updated_since else "ALL",
+        subject or "ANY",
+    )
+    return _run_sync(jurisdictions, updated_since, subject)

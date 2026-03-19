@@ -6,16 +6,16 @@ import os
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pymongo.collection import Collection
 
+from .auth import require_api_key
 from .db import get_collection
 
 app = FastAPI(
     title="Legislation API",
-    description="Query US state legislation synced from OpenStates.",
+    description="Query US state legislation synced from OpenStates. Authenticate with `X-API-Key` header.",
     version="1.0.0",
 )
 
@@ -23,12 +23,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["GET"],
-    allow_headers=["*"],
+    allow_headers=["*", "X-API-Key"],
 )
 
 
 def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
-    """Convert MongoDB document to JSON-serialisable dict."""
     doc.pop("_id", None)
     for key, value in doc.items():
         if isinstance(value, datetime):
@@ -40,11 +39,11 @@ def _get_col() -> Collection:
     return get_collection()
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+# ── Health (no auth) ──────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["Meta"])
 def health() -> dict[str, str]:
-    """Returns ok when MongoDB is reachable."""
+    """Returns ok when MongoDB is reachable. No authentication required."""
     try:
         _get_col().database.client.admin.command("ping")
         return {"status": "ok"}
@@ -55,7 +54,9 @@ def health() -> dict[str, str]:
 # ── Jurisdictions ─────────────────────────────────────────────────────────────
 
 @app.get("/api/jurisdictions", tags=["Legislation"])
-def list_jurisdictions() -> list[dict[str, str]]:
+def list_jurisdictions(
+    _key: dict = Depends(require_api_key),
+) -> list[dict[str, str]]:
     """Return all unique jurisdiction IDs and names present in the database."""
     col = _get_col()
     pipeline = [
@@ -69,13 +70,15 @@ def list_jurisdictions() -> list[dict[str, str]]:
 
 @app.get("/api/legislation", tags=["Legislation"])
 def list_legislation(
-    jurisdiction: str | None = Query(None, description="Jurisdiction ID (e.g. 'ocd-jurisdiction/country:us/state:ca/government')"),
+    jurisdiction: str | None = Query(None, description="Jurisdiction ID or state abbreviation"),
     session: str | None = Query(None, description="Legislative session string"),
     classification: str | None = Query(None, description="Bill classification (e.g. 'bill', 'resolution')"),
-    q: str | None = Query(None, description="Full-text search on title"),
-    updated_since: str | None = Query(None, description="ISO 8601 datetime — only bills updated after this date"),
-    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
-    limit: int = Query(20, ge=1, le=100, description="Results per page (max 100)"),
+    subject: str | None = Query(None, description="Policy area / subject (e.g. 'energy', 'health')"),
+    q: str | None = Query(None, description="Full-text search on title (case-insensitive)"),
+    updated_since: str | None = Query(None, description="ISO 8601 datetime — only bills updated after this"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    _key: dict = Depends(require_api_key),
 ) -> dict[str, Any]:
     """List legislation with optional filters and pagination."""
     col = _get_col()
@@ -87,13 +90,15 @@ def list_legislation(
         filt["session"] = session
     if classification:
         filt["classification"] = classification
+    if subject:
+        filt["subjects"] = {"$in": [subject]}
     if q:
         filt["title"] = {"$regex": q, "$options": "i"}
     if updated_since:
         try:
             dt = datetime.fromisoformat(updated_since.replace("Z", "+00:00"))
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid updated_since format — use ISO 8601")
+            raise HTTPException(status_code=400, detail="Invalid updated_since — use ISO 8601")
         filt["updatedAt"] = {"$gte": dt}
 
     total = col.count_documents(filt)
@@ -110,7 +115,7 @@ def list_legislation(
         "total": total,
         "page": page,
         "limit": limit,
-        "pages": max(1, -(-total // limit)),  # ceiling division
+        "pages": max(1, -(-total // limit)),
         "results": [_serialize(d) for d in docs],
     }
 
@@ -118,7 +123,10 @@ def list_legislation(
 # ── Single bill ───────────────────────────────────────────────────────────────
 
 @app.get("/api/legislation/{bill_id:path}", tags=["Legislation"])
-def get_legislation(bill_id: str) -> dict[str, Any]:
+def get_legislation(
+    bill_id: str,
+    _key: dict = Depends(require_api_key),
+) -> dict[str, Any]:
     """Fetch a single legislation document by its OpenStates ID."""
     col = _get_col()
     doc = col.find_one({"id": bill_id}, {"_id": 0})
