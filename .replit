@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-3.11"]
+modules = ["nodejs-24", "python-3.11", "python3.11"]
 
 [[artifacts]]
 id = "artifacts/api-server"
@@ -34,6 +34,10 @@ args = "Start Redis"
 task = "workflow.run"
 args = "Start Celery"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Legislation API"
+
 [[workflows.workflow]]
 name = "Start MongoDB"
 author = "agent"
@@ -67,6 +71,17 @@ args = "bash artifacts/legislation-worker/run_worker.sh"
 [workflows.workflow.metadata]
 outputType = "console"
 
+[[workflows.workflow]]
+name = "Legislation API"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash artifacts/legislation-worker/run_api.sh"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
@@ -78,3 +93,11 @@ timeoutMs = 20000
 [nix]
 channel = "stable-25_05"
 packages = ["mongodb", "redis", "uv"]
+
+[userenv]
+
+[userenv.shared]
+LEGISLATION_API_URL = "https://0c2e72a2-c56c-4994-b869-80633822760a-00-11mwnqkdda7si.riker.replit.dev:8001"
+LEGISLATION_API_INTERNAL_URL = "http://localhost:8001"
+MONGODB_URI = "mongodb://localhost:27017"
+MONGODB_DB = "state_pulse"

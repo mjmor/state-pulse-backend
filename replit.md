@@ -134,7 +134,24 @@ A standalone Python project at `artifacts/legislation-worker/` that runs a Celer
 | `Start Redis` | `run_redis.sh` | Starts `redis-server` on `localhost:6379`, data in `data/redis/` |
 | `Start Celery` | `run_worker.sh` | Starts Celery Beat + Worker; health-checks MongoDB (pymongo ping) and Redis (`redis-cli ping`) before proceeding |
 
-**Start order**: `Start MongoDB` → `Start Redis` → `Start Celery`
+| `Legislation API` | `run_api.sh` | FastAPI REST server on port 8001; health-checks MongoDB before starting |
+
+**Start order**: `Start MongoDB` → `Start Redis` → `Start Celery`, `Legislation API` (both depend on MongoDB)
+
+### REST API Endpoints (port 8001)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | MongoDB health check |
+| `GET` | `/api/jurisdictions` | List all jurisdictions present in the DB |
+| `GET` | `/api/legislation` | Paginated bill list (filters: `jurisdiction`, `session`, `classification`, `q`, `updated_since`, `page`, `limit`) |
+| `GET` | `/api/legislation/{id}` | Single bill by OpenStates ID |
+| `GET` | `/docs` | Auto-generated Swagger UI |
+
+**External base URL** (stored in `LEGISLATION_API_URL` env var):
+```
+https://0c2e72a2-c56c-4994-b869-80633822760a-00-11mwnqkdda7si.riker.replit.dev:8001
+```
 
 ### Configuration (env vars / secrets)
 
