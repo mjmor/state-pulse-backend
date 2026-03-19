@@ -15,7 +15,7 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
-BILL_INCLUDE = "abstracts,actions,sponsorships,versions,sources"
+BILL_INCLUDE = ["abstracts", "actions", "sponsorships", "versions", "sources"]
 
 _DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _RETRY_DELAYS = [5, 15, 30]
@@ -59,15 +59,22 @@ def fetch_bills(
     updated_since: datetime | None = None,
     subject: str | None = None,
 ) -> Generator[dict[str, Any], None, None]:
-    """Yield all bills for a jurisdiction, with optional time and subject filters.
+    """Yield all bills for a jurisdiction, with optional time and keyword filters.
 
     Args:
         jurisdiction: State abbreviation or OpenStates jurisdiction ID.
         updated_since: Only return bills updated after this datetime.
                        Pass ``None`` to fetch all bills regardless of date
                        (equivalent to "all time" — use carefully on large states).
-        subject: Policy area / legislative subject to filter by
-                 (e.g. "energy", "health", "education"). ``None`` means no filter.
+        subject: Policy area keyword to search for using full-text search
+                 (e.g. "energy", "health", "education"). Sent as the ``q``
+                 parameter — no filter means all bills.
+
+    Note:
+        OpenStates ``subject`` taxonomy codes are state-specific (e.g.
+        "ENERGY (S0101)"). We use the free-text ``q`` parameter instead,
+        which searches bill titles and text and works uniformly across all
+        jurisdictions.
     """
     page = 1
 
@@ -87,7 +94,7 @@ def fetch_bills(
                 )
 
             if subject is not None:
-                params["subject"] = subject
+                params["q"] = subject
 
             logger.debug(
                 "Fetching jurisdiction=%s page=%d updated_since=%s subject=%s",

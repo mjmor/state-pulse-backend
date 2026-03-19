@@ -41,14 +41,16 @@ def _parse_date(value: str | None) -> datetime | None:
     """Convert an ISO date string to a datetime, or return None."""
     if not value:
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(value, fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
-        except ValueError:
-            continue
+    # fromisoformat handles all ISO 8601 variants including microseconds and
+    # timezone offsets (Python 3.11+).  Fall back to manual strptime for
+    # the bare-Z suffix variant that older Pythons don't support.
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        pass
     logger.warning("Could not parse date: %r", value)
     return None
 
