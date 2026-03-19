@@ -13,10 +13,13 @@ from pymongo.collection import Collection
 from .auth import require_api_key
 from .db import get_collection
 
+_ROOT_PATH = os.environ.get("ROOT_PATH", "/legislation-api")
+
 app = FastAPI(
     title="Legislation API",
     description="Query US state legislation synced from OpenStates. Authenticate with `X-API-Key` header.",
     version="1.0.0",
+    root_path=_ROOT_PATH,
 )
 
 app.add_middleware(
