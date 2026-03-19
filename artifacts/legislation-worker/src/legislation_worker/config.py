@@ -27,5 +27,17 @@ JURISDICTIONS: list[str] = (
     else ALL_JURISDICTIONS
 )
 
-SYNC_LOOKBACK_HOURS: int = int(os.environ.get("SYNC_LOOKBACK_HOURS", "24"))
+# SYNC_LOOKBACK: number of hours to look back, or "all" to fetch everything.
+# "all" omits the updated_since filter entirely — use only for narrow
+# jurisdiction/subject combinations to stay within rate limits.
+SYNC_LOOKBACK: str = os.environ.get("SYNC_LOOKBACK", "24")
+
+# SUBJECT_FILTER: optional OpenStates legislative subject to narrow syncs.
+# e.g. "energy", "health", "education". Leave empty for no filter.
+SUBJECT_FILTER: str | None = os.environ.get("SUBJECT_FILTER") or None
+
 PAGE_SIZE: int = int(os.environ.get("PAGE_SIZE", "20"))
+
+# Kept for backwards compatibility — prefer SYNC_LOOKBACK
+_lookback_raw = os.environ.get("SYNC_LOOKBACK_HOURS", "")
+SYNC_LOOKBACK_HOURS: int = int(_lookback_raw) if _lookback_raw else 24

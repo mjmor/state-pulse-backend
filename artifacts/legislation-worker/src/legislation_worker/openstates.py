@@ -1,4 +1,4 @@
-"""OpenStates API v3 client — fetches bills updated within a time window."""
+"""OpenStates API v3 client — fetches bills with configurable filters."""
 
 import logging
 import time
@@ -54,35 +54,47 @@ def _get_with_retry(client: httpx.Client, path: str, params: dict[str, Any]) -> 
     raise RuntimeError(f"All retries exhausted for {path}")
 
 
-def fetch_bills_since(
+def fetch_bills(
     jurisdiction: str,
-    updated_since: datetime,
+    updated_since: datetime | None = None,
+    subject: str | None = None,
 ) -> Generator[dict[str, Any], None, None]:
-    """Yield all bills for a jurisdiction updated since *updated_since*.
+    """Yield all bills for a jurisdiction, with optional time and subject filters.
 
-    The ``updated_since`` param is sent as an ISO-8601 timestamp. Pagination
-    is handled automatically by following the ``meta.page`` cursor until all
-    pages have been consumed.
+    Args:
+        jurisdiction: State abbreviation or OpenStates jurisdiction ID.
+        updated_since: Only return bills updated after this datetime.
+                       Pass ``None`` to fetch all bills regardless of date
+                       (equivalent to "all time" — use carefully on large states).
+        subject: Policy area / legislative subject to filter by
+                 (e.g. "energy", "health", "education"). ``None`` means no filter.
     """
-    since_str = updated_since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     page = 1
 
     with _make_client() as client:
         while True:
             params: dict[str, Any] = {
                 "jurisdiction": jurisdiction,
-                "updated_since": since_str,
                 "include": BILL_INCLUDE,
                 "page": page,
                 "per_page": PAGE_SIZE,
                 "sort": "updated_desc",
             }
 
+            if updated_since is not None:
+                params["updated_since"] = (
+                    updated_since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                )
+
+            if subject is not None:
+                params["subject"] = subject
+
             logger.debug(
-                "Fetching jurisdiction=%s page=%d updated_since=%s",
+                "Fetching jurisdiction=%s page=%d updated_since=%s subject=%s",
                 jurisdiction,
                 page,
-                since_str,
+                params.get("updated_since", "ALL"),
+                subject or "ANY",
             )
 
             data = _get_with_retry(client, "/bills", params)
@@ -96,13 +108,24 @@ def fetch_bills_since(
             meta: dict[str, Any] = data.get("pagination", {})
             max_page: int = meta.get("max_page", 1)
             logger.info(
-                "Fetched %d bills from %s (page %d/%d)",
+                "Fetched %d bills from %s (page %d/%d) subject=%s",
                 len(results),
                 jurisdiction,
                 page,
                 max_page,
+                subject or "ANY",
             )
 
             if page >= max_page:
                 break
             page += 1
+
+
+# Backwards-compatible alias used by the scheduled task
+def fetch_bills_since(
+    jurisdiction: str,
+    updated_since: datetime,
+    subject: str | None = None,
+) -> Generator[dict[str, Any], None, None]:
+    """Alias for fetch_bills with a required updated_since for backwards compatibility."""
+    return fetch_bills(jurisdiction, updated_since=updated_since, subject=subject)
