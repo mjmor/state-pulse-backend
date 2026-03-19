@@ -15,13 +15,7 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
-BILL_INCLUDE = [
-    "abstracts",
-    "actions",
-    "sponsorships",
-    "versions",
-    "sources",
-]
+BILL_INCLUDE = "abstracts,actions,sponsorships,versions,sources"
 
 _DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _RETRY_DELAYS = [5, 15, 30]

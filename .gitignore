@@ -51,3 +51,4 @@ Thumbs.db
 # Local service data (MongoDB + Redis)
 data/
 celerybeat-schedule
+artifacts/legislation-worker/celerybeat-schedule
