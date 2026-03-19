@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local service data (MongoDB + Redis)
+data/
+celerybeat-schedule

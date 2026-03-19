@@ -1,0 +1,18 @@
+[project]
+name = "legislation-worker"
+version = "0.1.0"
+description = "OpenStates legislation ETL worker using Celery and MongoDB"
+requires-python = ">=3.11"
+dependencies = [
+    "celery[redis]>=5.3",
+    "pymongo>=4.6",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[tool.setuptools.packages.find]
+where = ["src"]

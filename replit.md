@@ -2,7 +2,7 @@
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+pnpm workspace monorepo using TypeScript, plus a standalone Python legislation worker for OpenStates ETL.
 
 ## Stack
 
@@ -11,17 +11,36 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **Package manager**: pnpm
 - **TypeScript version**: 5.9
 - **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
+- **Database (TS)**: PostgreSQL + Drizzle ORM
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
+- **Python version**: 3.11
+- **Task queue**: Celery 5 with Redis broker
+- **Legislation DB**: MongoDB 7 (local, data at `/home/runner/workspace/data/mongodb/`)
+- **Broker/cache**: Redis 7 (local, data at `/home/runner/workspace/data/redis/`)
 
 ## Structure
 
 ```text
 artifacts-monorepo/
 ├── artifacts/              # Deployable applications
-│   └── api-server/         # Express API server
+│   ├── api-server/         # Express API server
+│   └── legislation-worker/ # Python Celery ETL worker (OpenStates → MongoDB)
+│       ├── pyproject.toml
+│       ├── run_mongodb.sh  # Starts local mongod
+│       ├── run_redis.sh    # Starts local redis-server
+│       ├── run_worker.sh   # Starts Celery Beat + Worker
+│       └── src/legislation_worker/
+│           ├── config.py        # Env-based configuration
+│           ├── openstates.py    # OpenStates API v3 client (paginated)
+│           ├── db.py            # MongoDB connection + bill→Legislation mapping
+│           ├── celery_app.py    # Celery application factory
+│           ├── celeryconfig.py  # Beat schedule (daily at midnight UTC)
+│           └── tasks.py        # sync_legislation Celery task
+├── data/                   # Persistent local service data (gitignored)
+│   ├── mongodb/            # MongoDB data files
+│   └── redis/              # Redis AOF/RDB files
 ├── lib/                    # Shared libraries
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config
 │   ├── api-client-react/   # Generated React Query hooks
@@ -94,3 +113,48 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+
+---
+
+## Legislation Worker (Python)
+
+A standalone Python project at `artifacts/legislation-worker/` that runs a Celery-based ETL pipeline.
+
+### How it works
+
+1. **Celery Beat** fires the `sync_legislation` task once every 24 hours (daily at midnight UTC).
+2. **Celery Worker** executes the task: computes `updated_since = now - 24h`, calls the OpenStates API `/bills` endpoint with `updated_since` and full `include` params, paginates through all results per jurisdiction, and upserts each bill into MongoDB.
+3. **MongoDB** stores the bills in the `legislation` collection with the schema from the state-pulse `Legislation` interface.
+
+### Workflows
+
+| Workflow | Command | Purpose |
+|---|---|---|
+| `Start MongoDB` | `run_mongodb.sh` | Starts `mongod` on `localhost:27017`, data in `data/mongodb/` |
+| `Start Redis` | `run_redis.sh` | Starts `redis-server` on `localhost:6379`, data in `data/redis/` |
+| `Start Celery` | `run_worker.sh` | Starts Celery Beat + Worker (both in the same process group) |
+
+**Start order**: MongoDB → Redis → Celery
+
+### Configuration (env vars / secrets)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `OPENSTATES_API_KEY` | Yes (secret) | — | OpenStates API key |
+| `MONGODB_URI` | No | `mongodb://localhost:27017` | MongoDB connection URI |
+| `MONGODB_DB` | No | `state_pulse` | Database name |
+| `REDIS_URL` | No | `redis://localhost:6379/0` | Redis broker URL |
+| `JURISDICTIONS` | No | All 50 states + DC | Comma-separated state codes, e.g. `CA,NY,TX` |
+| `SYNC_LOOKBACK_HOURS` | No | `24` | Hours to look back for updated bills |
+
+### Python source layout
+
+```
+src/legislation_worker/
+├── config.py        # Reads env vars, defines JURISDICTIONS list
+├── openstates.py    # Paginated OpenStates /bills client with retry logic
+├── db.py            # pymongo connection, index creation, bill→Legislation mapping
+├── celery_app.py    # Celery app factory
+├── celeryconfig.py  # Beat schedule (crontab 0 0 * * *)
+└── tasks.py         # sync_legislation task
+```
