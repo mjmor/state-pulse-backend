@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 _client: MongoClient | None = None
 
+_ENRICHED_FIELDS = frozenset([
+    "fullText",
+    "fullTextUrl",
+    "fullTextFetchedAt",
+    "fullTextFetchError",
+])
+
 
 def get_client() -> MongoClient:
     global _client
@@ -34,6 +41,7 @@ def ensure_indexes(collection: Collection) -> None:
     collection.create_index("jurisdictionId", background=True)
     collection.create_index("latestActionAt", background=True)
     collection.create_index("updatedAt", background=True)
+    collection.create_index("fullTextFetchedAt", background=True)
     logger.info("MongoDB indexes ensured on 'legislation' collection")
 
 
@@ -41,9 +49,6 @@ def _parse_date(value: str | None) -> datetime | None:
     """Convert an ISO date string to a datetime, or return None."""
     if not value:
         return None
-    # fromisoformat handles all ISO 8601 variants including microseconds and
-    # timezone offsets (Python 3.11+).  Fall back to manual strptime for
-    # the bare-Z suffix variant that older Pythons don't support.
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if dt.tzinfo is None:
@@ -94,8 +99,13 @@ def _map_abstract(abstract: dict[str, Any]) -> dict[str, Any]:
 
 
 def bill_to_legislation(bill: dict[str, Any]) -> dict[str, Any]:
-    """Map an OpenStates Bill API response to the Legislation document schema."""
+    """Map an OpenStates Bill API response to the Legislation document schema.
 
+    Note: enrichment fields (fullText, fullTextUrl, fullTextFetchedAt,
+    fullTextFetchError) are NOT included here. They are handled separately
+    via $setOnInsert in upsert_legislation so re-syncs never overwrite
+    already-fetched text.
+    """
     jurisdiction: dict[str, Any] = bill.get("jurisdiction") or {}
     from_org: dict[str, Any] = bill.get("from_organization") or {}
     chamber_name: str | None = from_org.get("name") or from_org.get("classification")
@@ -130,7 +140,6 @@ def bill_to_legislation(bill: dict[str, Any]) -> dict[str, Any]:
         "createdAt": _parse_date(bill.get("created_at")) or now,
         "updatedAt": _parse_date(bill.get("updated_at")) or now,
         "extras": bill.get("extras") or None,
-        "fullText": None,
         "geminiSummary": None,
         "longGeminiSummary": None,
         "geminiSummarySource": None,
@@ -144,13 +153,26 @@ def bill_to_legislation(bill: dict[str, Any]) -> dict[str, Any]:
 
 
 def upsert_legislation(collection: Collection, bill: dict[str, Any]) -> bool:
-    """Map and upsert a bill. Returns True if the document was inserted/modified."""
+    """Map and upsert a bill. Returns True if the document was inserted/modified.
+
+    Enrichment fields (fullText, fullTextUrl, fullTextFetchedAt,
+    fullTextFetchError) are protected: they are initialised to None only on
+    first insert ($setOnInsert) and are never touched during subsequent syncs.
+    """
     doc = bill_to_legislation(bill)
     bill_id = doc["id"]
 
     result = collection.update_one(
         {"id": bill_id},
-        {"$set": doc},
+        {
+            "$set": doc,
+            "$setOnInsert": {
+                "fullText": None,
+                "fullTextUrl": None,
+                "fullTextFetchedAt": None,
+                "fullTextFetchError": None,
+            },
+        },
         upsert=True,
     )
     return result.upserted_id is not None or result.modified_count > 0

@@ -1,6 +1,7 @@
 """Celery tasks for syncing legislation from OpenStates."""
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -8,8 +9,12 @@ from .celery_app import app
 from .config import JURISDICTIONS, SUBJECT_FILTER, SYNC_LOOKBACK
 from .db import ensure_indexes, get_collection, upsert_legislation
 from .openstates import fetch_bills
+from .text_fetcher import fetch_plain_text, pick_best_html_url
 
 logger = logging.getLogger(__name__)
+
+_TEXT_BATCH_SIZE = 50
+_INTER_REQUEST_DELAY = 0.15
 
 
 def _resolve_updated_since(lookback: str) -> datetime | None:
@@ -99,7 +104,9 @@ def sync_legislation(self) -> dict:
         JURISDICTIONS,
         SUBJECT_FILTER or "ANY",
     )
-    return _run_sync(JURISDICTIONS, updated_since, SUBJECT_FILTER)
+    result = _run_sync(JURISDICTIONS, updated_since, SUBJECT_FILTER)
+    fetch_bill_texts.delay()
+    return result
 
 
 @app.task(bind=True, name="legislation_worker.tasks.one_time_sync", max_retries=0)
@@ -124,4 +131,112 @@ def one_time_sync(
         updated_since.isoformat() if updated_since else "ALL",
         subject or "ANY",
     )
-    return _run_sync(jurisdictions, updated_since, subject)
+    result = _run_sync(jurisdictions, updated_since, subject)
+    fetch_bill_texts.delay()
+    return result
+
+
+@app.task(bind=True, name="legislation_worker.tasks.fetch_bill_texts", max_retries=0)
+def fetch_bill_texts(
+    self,
+    bill_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch and store plain-text bill content from state legislature HTML pages.
+
+    Processes all bills where ``fullTextFetchedAt`` is null (not yet fetched)
+    unless a specific list of ``bill_ids`` is given.  Bills are processed in
+    batches of ``_TEXT_BATCH_SIZE`` with a short inter-request delay to avoid
+    hammering legislature servers.
+
+    Args:
+        bill_ids: Optional list of OpenStates bill IDs to restrict processing.
+                  When None, all un-fetched bills with at least one version
+                  are processed.
+
+    Returns:
+        A summary dict with counts for fetched, skipped, and failed bills.
+    """
+    collection = get_collection()
+    now = datetime.now(tz=timezone.utc)
+
+    if bill_ids is not None:
+        query: dict[str, Any] = {"id": {"$in": bill_ids}, "versions": {"$ne": []}}
+    else:
+        query = {
+            "fullTextFetchedAt": None,
+            "versions": {"$exists": True, "$ne": []},
+        }
+
+    total = collection.count_documents(query)
+    logger.info("fetch_bill_texts: %d bills to process", total)
+
+    success_count = 0
+    skip_count = 0
+    fail_count = 0
+    processed = 0
+
+    cursor = collection.find(query, {"id": 1, "versions": 1})
+
+    for doc in cursor:
+        bill_id: str = doc["id"]
+        versions: list[dict[str, Any]] = doc.get("versions", [])
+
+        url = pick_best_html_url(versions)
+        if not url:
+            collection.update_one(
+                {"id": bill_id},
+                {"$set": {
+                    "fullTextFetchedAt": now,
+                    "fullTextFetchError": "no_html_url",
+                }},
+            )
+            skip_count += 1
+            processed += 1
+            continue
+
+        try:
+            text = fetch_plain_text(url)
+            collection.update_one(
+                {"id": bill_id},
+                {"$set": {
+                    "fullText": text,
+                    "fullTextUrl": url,
+                    "fullTextFetchedAt": now,
+                    "fullTextFetchError": None,
+                }},
+            )
+            success_count += 1
+        except Exception as exc:
+            error_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+            logger.warning("Text fetch failed for %s (%s): %s", bill_id, url, error_msg)
+            collection.update_one(
+                {"id": bill_id},
+                {"$set": {
+                    "fullTextFetchedAt": now,
+                    "fullTextFetchError": error_msg,
+                }},
+            )
+            fail_count += 1
+
+        processed += 1
+
+        if processed % 100 == 0:
+            logger.info(
+                "fetch_bill_texts progress: %d/%d — success=%d skip=%d fail=%d",
+                processed,
+                total,
+                success_count,
+                skip_count,
+                fail_count,
+            )
+
+        time.sleep(_INTER_REQUEST_DELAY)
+
+    summary = {
+        "total": total,
+        "success": success_count,
+        "skipped_no_html": skip_count,
+        "failed": fail_count,
+    }
+    logger.info("fetch_bill_texts complete: %s", summary)
+    return summary

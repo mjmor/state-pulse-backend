@@ -12,6 +12,7 @@ from pymongo.collection import Collection
 
 from .auth import require_api_key
 from .db import get_collection
+from .tasks import fetch_bill_texts
 
 _ROOT_PATH = os.environ.get("ROOT_PATH", "/legislation-api")
 
@@ -43,7 +44,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*", "X-API-Key"],
 )
 
@@ -154,3 +155,27 @@ def get_legislation(
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Bill '{bill_id}' not found")
     return _serialize(doc)
+
+
+# ── Text fetching ──────────────────────────────────────────────────────────────
+
+@app.post("/api/legislation/fetch-texts", tags=["Enrichment"])
+def trigger_fetch_texts(
+    _key: dict = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Queue a background task to fetch full bill text for all un-fetched bills.
+
+    Processes every bill in MongoDB where ``fullTextFetchedAt`` is null,
+    fetching the HTML text from state legislature URLs stored in ``versions``.
+    Idempotent — bills with ``fullTextFetchedAt`` already set are skipped.
+
+    Returns the Celery task ID so progress can be monitored.
+    """
+    task = fetch_bill_texts.delay()
+    col = _get_col()
+    pending = col.count_documents({"fullTextFetchedAt": None})
+    return {
+        "task_id": task.id,
+        "message": "Text fetching queued",
+        "pending_bills": pending,
+    }
