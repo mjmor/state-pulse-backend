@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
@@ -10,7 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo.collection import Collection
 
-from .auth import require_api_key
+from .auth import require_api_key, require_scope
 from .db import get_collection
 from .tasks import fetch_bill_texts, vectorize_bills
 
@@ -34,11 +35,24 @@ def _normalize_jurisdiction(value: str) -> str:
         return f"{_OCD_PREFIX}{v.lower()}{_OCD_SUFFIX}"
     return v
 
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    """Ensure pgvector schema exists when the API process starts."""
+    try:
+        from .vector_store import ensure_schema
+        ensure_schema()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Could not initialise pgvector schema on startup: %s", exc)
+    yield
+
+
 app = FastAPI(
     title="Legislation API",
     description="Query US state legislation synced from OpenStates. Authenticate with `X-API-Key` header.",
     version="1.0.0",
     root_path=_ROOT_PATH,
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -238,7 +252,7 @@ def trigger_fetch_texts(
 
 @app.post("/api/legislation/vectorize", tags=["Enrichment"])
 def trigger_vectorize(
-    _key: dict = Depends(require_api_key),
+    _key: dict = Depends(require_scope("admin")),
 ) -> dict[str, Any]:
     """Queue a background task to embed all un-vectorized bills into pgvector.
 
@@ -249,6 +263,8 @@ def trigger_vectorize(
 
     Idempotent — bills with ``vectorizedAt`` already set are skipped.
     Returns the Celery task ID and the current pending count.
+
+    Requires the ``admin`` scope.
     """
     task = vectorize_bills.delay()
     col = _get_col()

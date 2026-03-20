@@ -15,7 +15,7 @@ from functools import lru_cache
 
 import psycopg2
 import psycopg2.extras
-from fastapi import HTTPException, Security, status
+from fastapi import Depends, HTTPException, Security, status
 from fastapi.security.api_key import APIKeyHeader
 
 logger = logging.getLogger(__name__)
@@ -109,3 +109,24 @@ async def require_api_key(api_key: str | None = Security(_API_KEY_HEADER)) -> di
         )
 
     return key_row
+
+
+def require_scope(scope: str):
+    """Return a FastAPI dependency that enforces a required scope.
+
+    Usage::
+
+        @app.post("/admin/action")
+        def action(_key: dict = Depends(require_scope("admin"))):
+            ...
+    """
+    async def _check(key_row: dict = Depends(require_api_key)) -> dict:
+        scopes: list = key_row.get("scopes") or []
+        if scope not in scopes:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"API key does not have the required scope: '{scope}'",
+            )
+        return key_row
+
+    return _check
