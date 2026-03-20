@@ -10,6 +10,12 @@ dependencies = [
     "python-dotenv>=1.0",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
+    "langchain>=0.3",
+    "langchain-community>=0.3",
+    "langchain-text-splitters>=0.3",
+    "langchain-huggingface>=0.1",
+    "sentence-transformers>=3.0",
+    "pgvector>=0.3",
 ]
 
 [build-system]

@@ -38,4 +38,5 @@ echo "[run_api] Starting uvicorn on ${API_HOST}:${API_PORT}..."
 exec python3 -m uvicorn legislation_worker.api:app \
     --host "$API_HOST" \
     --port "$API_PORT" \
-    --reload
+    --reload \
+    --reload-dir "${SCRIPT_DIR}/src"

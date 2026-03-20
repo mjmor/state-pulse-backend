@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 _TEXT_BATCH_SIZE = 50
 _INTER_REQUEST_DELAY = 0.1
+_VECTOR_BATCH_SIZE = 50
 
 
 def _resolve_updated_since(lookback: str) -> datetime | None:
@@ -107,6 +108,7 @@ def sync_legislation(self) -> dict:
     )
     result = _run_sync(JURISDICTIONS, updated_since, SUBJECT_FILTER)
     fetch_bill_texts.delay()
+    vectorize_bills.delay()
     return result
 
 
@@ -134,6 +136,7 @@ def one_time_sync(
     )
     result = _run_sync(jurisdictions, updated_since, subject)
     fetch_bill_texts.delay()
+    vectorize_bills.delay()
     return result
 
 
@@ -252,4 +255,118 @@ def fetch_bill_texts(
         "failed": fail_count,
     }
     logger.info("fetch_bill_texts complete: %s", summary)
+    return summary
+
+
+@app.task(bind=True, name="legislation_worker.tasks.vectorize_bills", max_retries=0)
+def vectorize_bills(
+    self,
+    bill_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Chunk and embed bill documents into pgvector for semantic search.
+
+    Processes all bills where ``vectorizedAt`` is null unless a specific list
+    of ``bill_ids`` is supplied.  For each bill the best available text is
+    chosen: ``fullText`` (if present and non-trivial) is chunked directly;
+    otherwise a prose document is assembled from metadata fields.
+
+    Each bill's chunks are upserted into the ``bill_chunks`` PostgreSQL table
+    and ``vectorizedAt`` is stamped on the MongoDB document upon success.
+    Bills that fail are logged but left with ``vectorizedAt=null`` for retry
+    on the next run.
+
+    Args:
+        bill_ids: Optional list of OpenStates IDs. When None, all un-vectorized
+                  bills are processed in batches of ``_VECTOR_BATCH_SIZE``.
+
+    Returns:
+        Summary dict with counts for vectorized, skipped (no usable text),
+        and failed bills.
+    """
+    from .chunker import chunk_bill
+    from .vector_store import ensure_schema, upsert_bill_vectors
+    from .vectorizer import embed_chunks
+
+    ensure_schema()
+
+    collection = get_collection()
+    now = datetime.now(tz=timezone.utc)
+
+    if bill_ids is not None:
+        query: dict[str, Any] = {"id": {"$in": bill_ids}}
+    else:
+        query = {"vectorizedAt": None}
+
+    all_ids: list[str] = [doc["id"] for doc in collection.find(query, {"id": 1})]
+    total = len(all_ids)
+    logger.info(
+        "vectorize_bills: %d bills to process in batches of %d",
+        total,
+        _VECTOR_BATCH_SIZE,
+    )
+
+    success_count = 0
+    skip_count = 0
+    fail_count = 0
+    processed = 0
+
+    id_iter = iter(all_ids)
+    batch_num = 0
+    while True:
+        batch = list(islice(id_iter, _VECTOR_BATCH_SIZE))
+        if not batch:
+            break
+        batch_num += 1
+
+        batch_docs = list(collection.find({"id": {"$in": batch}}))
+
+        for doc in batch_docs:
+            bill_id: str = doc["id"]
+            try:
+                chunks = chunk_bill(doc)
+                if not chunks:
+                    collection.update_one(
+                        {"id": bill_id},
+                        {"$set": {"vectorizedAt": now}},
+                    )
+                    skip_count += 1
+                    processed += 1
+                    continue
+
+                embeddings = embed_chunks(chunks)
+                upsert_bill_vectors(bill_id, chunks, embeddings)
+                collection.update_one(
+                    {"id": bill_id},
+                    {"$set": {"vectorizedAt": now}},
+                )
+                success_count += 1
+            except Exception as exc:
+                logger.warning(
+                    "vectorize_bills: failed for %s — %s: %s",
+                    bill_id,
+                    type(exc).__name__,
+                    str(exc)[:200],
+                )
+                fail_count += 1
+
+            processed += 1
+
+        logger.info(
+            "vectorize_bills batch %d done — progress: %d/%d "
+            "success=%d skip=%d fail=%d",
+            batch_num,
+            processed,
+            total,
+            success_count,
+            skip_count,
+            fail_count,
+        )
+
+    summary = {
+        "total": total,
+        "vectorized": success_count,
+        "skipped_no_text": skip_count,
+        "failed": fail_count,
+    }
+    logger.info("vectorize_bills complete: %s", summary)
     return summary

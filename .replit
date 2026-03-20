@@ -92,7 +92,7 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
-packages = ["mongodb", "redis", "uv"]
+packages = ["mongodb", "postgresql", "redis", "uv"]
 
 [userenv]
 

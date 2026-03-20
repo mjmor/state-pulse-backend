@@ -35,6 +35,7 @@ def ensure_indexes(collection: Collection) -> None:
     collection.create_index("latestActionAt", background=True)
     collection.create_index("updatedAt", background=True)
     collection.create_index("fullTextFetchedAt", background=True)
+    collection.create_index("vectorizedAt", background=True)
     logger.info("MongoDB indexes ensured on 'legislation' collection")
 
 
@@ -164,6 +165,7 @@ def upsert_legislation(collection: Collection, bill: dict[str, Any]) -> bool:
                 "fullTextUrl": None,
                 "fullTextFetchedAt": None,
                 "fullTextFetchError": None,
+                "vectorizedAt": None,
             },
         },
         upsert=True,

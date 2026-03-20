@@ -12,7 +12,7 @@ from pymongo.collection import Collection
 
 from .auth import require_api_key
 from .db import get_collection
-from .tasks import fetch_bill_texts
+from .tasks import fetch_bill_texts, vectorize_bills
 
 _ROOT_PATH = os.environ.get("ROOT_PATH", "/legislation-api")
 
@@ -142,6 +142,59 @@ def list_legislation(
     }
 
 
+# ── Semantic search ───────────────────────────────────────────────────────────
+# NOTE: This GET route MUST be declared before /{bill_id:path} to avoid being
+# swallowed by the path wildcard.
+
+@app.get("/api/legislation/search", tags=["Search"])
+def semantic_search_endpoint(
+    q: str = Query(..., description="Natural language search query"),
+    jurisdiction: str | None = Query(None, description="State abbreviation or full OCD jurisdiction ID"),
+    classification: str | None = Query(None, description="Bill classification filter (e.g. 'bill', 'resolution')"),
+    limit: int = Query(10, ge=1, le=50, description="Maximum number of results"),
+    _key: dict = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Semantic similarity search over vectorized bills.
+
+    Embeds the query using ``sentence-transformers/all-MiniLM-L6-v2`` and
+    performs a cosine-distance search in the ``bill_chunks`` pgvector table.
+    Results are deduplicated to one row per bill (best-matching chunk) and
+    ranked by descending similarity score.
+
+    Args:
+        q:              Natural language query (e.g. "solar energy mandate").
+        jurisdiction:   Optional 2-letter state code or full OCD jurisdiction ID.
+        classification: Optional bill type filter (substring match).
+        limit:          Number of bills to return (1–50, default 10).
+    """
+    from .vector_store import semantic_search
+
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query 'q' must not be empty")
+
+    jurisdiction_id = _normalize_jurisdiction(jurisdiction) if jurisdiction else None
+
+    try:
+        results = semantic_search(
+            query_text=q,
+            k=limit,
+            jurisdiction=jurisdiction_id,
+            classification=classification,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Search unavailable: {exc}",
+        )
+
+    return {
+        "query": q,
+        "jurisdiction": jurisdiction,
+        "total": len(results),
+        "results": results,
+    }
+
+
 # ── Single bill ───────────────────────────────────────────────────────────────
 
 @app.get("/api/legislation/{bill_id:path}", tags=["Legislation"])
@@ -179,3 +232,31 @@ def trigger_fetch_texts(
         "message": "Text fetching queued",
         "pending_bills": pending,
     }
+
+
+# ── Vectorization ─────────────────────────────────────────────────────────────
+
+@app.post("/api/legislation/vectorize", tags=["Enrichment"])
+def trigger_vectorize(
+    _key: dict = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Queue a background task to embed all un-vectorized bills into pgvector.
+
+    Processes every bill in MongoDB where ``vectorizedAt`` is null. For bills
+    that have ``fullText``, that content is chunked and embedded directly. For
+    bills without full text, a structured prose document is assembled from
+    metadata fields (title, subjects, sponsors, action history, etc.).
+
+    Idempotent — bills with ``vectorizedAt`` already set are skipped.
+    Returns the Celery task ID and the current pending count.
+    """
+    task = vectorize_bills.delay()
+    col = _get_col()
+    pending = col.count_documents({"vectorizedAt": None})
+    return {
+        "task_id": task.id,
+        "message": "Vectorization queued",
+        "pending_bills": pending,
+    }
+
+
