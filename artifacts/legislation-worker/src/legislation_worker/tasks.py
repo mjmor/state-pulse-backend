@@ -3,6 +3,7 @@
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+from itertools import islice
 from typing import Any
 
 from .celery_app import app
@@ -14,7 +15,7 @@ from .text_fetcher import fetch_plain_text, pick_best_html_url
 logger = logging.getLogger(__name__)
 
 _TEXT_BATCH_SIZE = 50
-_INTER_REQUEST_DELAY = 0.15
+_INTER_REQUEST_DELAY = 0.1
 
 
 def _resolve_updated_since(lookback: str) -> datetime | None:
@@ -145,8 +146,15 @@ def fetch_bill_texts(
 
     Processes all bills where ``fullTextFetchedAt`` is null (not yet fetched)
     unless a specific list of ``bill_ids`` is given.  Bills are processed in
-    batches of ``_TEXT_BATCH_SIZE`` with a short inter-request delay to avoid
-    hammering legislature servers.
+    explicit batches of ``_TEXT_BATCH_SIZE`` with a short inter-request delay
+    to avoid hammering legislature servers.
+
+    Failure handling:
+    - ``no_html_url``: terminal skip (no HTML will ever exist). Sets
+      ``fullTextFetchedAt`` so the bill is not re-queued on future runs.
+    - HTTP/network errors: transient. ``fullTextFetchedAt`` is left null so
+      the bill will be retried on the next run. Only ``fullTextFetchError``
+      is updated with the last error message.
 
     Args:
         bill_ids: Optional list of OpenStates bill IDs to restrict processing.
@@ -167,70 +175,75 @@ def fetch_bill_texts(
             "versions": {"$exists": True, "$ne": []},
         }
 
-    total = collection.count_documents(query)
-    logger.info("fetch_bill_texts: %d bills to process", total)
+    all_ids: list[str] = [doc["id"] for doc in collection.find(query, {"id": 1})]
+    total = len(all_ids)
+    logger.info("fetch_bill_texts: %d bills to process in batches of %d", total, _TEXT_BATCH_SIZE)
 
     success_count = 0
     skip_count = 0
     fail_count = 0
     processed = 0
 
-    cursor = collection.find(query, {"id": 1, "versions": 1})
+    id_iter = iter(all_ids)
+    batch_num = 0
+    while True:
+        batch = list(islice(id_iter, _TEXT_BATCH_SIZE))
+        if not batch:
+            break
+        batch_num += 1
 
-    for doc in cursor:
-        bill_id: str = doc["id"]
-        versions: list[dict[str, Any]] = doc.get("versions", [])
+        batch_docs = list(collection.find({"id": {"$in": batch}}, {"id": 1, "versions": 1}))
 
-        url = pick_best_html_url(versions)
-        if not url:
-            collection.update_one(
-                {"id": bill_id},
-                {"$set": {
-                    "fullTextFetchedAt": now,
-                    "fullTextFetchError": "no_html_url",
-                }},
-            )
-            skip_count += 1
+        for doc in batch_docs:
+            bill_id: str = doc["id"]
+            versions: list[dict[str, Any]] = doc.get("versions", [])
+
+            url = pick_best_html_url(versions)
+            if not url:
+                collection.update_one(
+                    {"id": bill_id},
+                    {"$set": {
+                        "fullTextFetchedAt": now,
+                        "fullTextFetchError": "no_html_url",
+                    }},
+                )
+                skip_count += 1
+                processed += 1
+                continue
+
+            try:
+                text = fetch_plain_text(url)
+                collection.update_one(
+                    {"id": bill_id},
+                    {"$set": {
+                        "fullText": text,
+                        "fullTextUrl": url,
+                        "fullTextFetchedAt": now,
+                        "fullTextFetchError": None,
+                    }},
+                )
+                success_count += 1
+            except Exception as exc:
+                error_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+                logger.warning("Text fetch failed for %s (%s): %s", bill_id, url, error_msg)
+                collection.update_one(
+                    {"id": bill_id},
+                    {"$set": {"fullTextFetchError": error_msg}},
+                )
+                fail_count += 1
+
             processed += 1
-            continue
+            time.sleep(_INTER_REQUEST_DELAY)
 
-        try:
-            text = fetch_plain_text(url)
-            collection.update_one(
-                {"id": bill_id},
-                {"$set": {
-                    "fullText": text,
-                    "fullTextUrl": url,
-                    "fullTextFetchedAt": now,
-                    "fullTextFetchError": None,
-                }},
-            )
-            success_count += 1
-        except Exception as exc:
-            error_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
-            logger.warning("Text fetch failed for %s (%s): %s", bill_id, url, error_msg)
-            collection.update_one(
-                {"id": bill_id},
-                {"$set": {
-                    "fullTextFetchedAt": now,
-                    "fullTextFetchError": error_msg,
-                }},
-            )
-            fail_count += 1
-
-        processed += 1
-
-        if processed % 100 == 0:
-            logger.info(
-                "fetch_bill_texts progress: %d/%d — success=%d skip=%d fail=%d",
-                processed,
-                total,
-                success_count,
-                skip_count,
-                fail_count,
-            )
-
-        time.sleep(_INTER_REQUEST_DELAY)
+        logger.info(
+            "fetch_bill_texts batch %d done — progress: %d/%d success=%d skip=%d fail=%d",
+            batch_num,
+            processed,
+            total,
+            success_count,
+            skip_count,
+            fail_count,
+        )
 
     summary = {
         "total": total,
