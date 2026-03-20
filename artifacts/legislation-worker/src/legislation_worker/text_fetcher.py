@@ -22,7 +22,6 @@ _VERSION_PRIORITY: dict[str, int] = {
     "filed": 10,
 }
 
-_FETCH_TIMEOUT = httpx.Timeout(25.0, connect=10.0)
 _HEADERS = {
     "User-Agent": "LegislationETL/1.0 (research; +https://github.com/statepulse)",
     "Accept": "text/html,application/xhtml+xml",
@@ -71,7 +70,7 @@ def pick_best_html_url(versions: list[dict[str, Any]]) -> str | None:
     return scored[0][2]
 
 
-def fetch_plain_text(url: str, timeout: float = 25.0) -> str:
+def fetch_plain_text(url: str, timeout: float = 20.0) -> str:
     """Fetch an HTML bill page and return clean plain text.
 
     Strips all HTML tags, collapses whitespace, and removes boilerplate

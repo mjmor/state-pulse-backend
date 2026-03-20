@@ -14,13 +14,6 @@ logger = logging.getLogger(__name__)
 
 _client: MongoClient | None = None
 
-_ENRICHED_FIELDS = frozenset([
-    "fullText",
-    "fullTextUrl",
-    "fullTextFetchedAt",
-    "fullTextFetchError",
-])
-
 
 def get_client() -> MongoClient:
     global _client
