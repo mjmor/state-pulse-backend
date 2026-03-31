@@ -189,3 +189,32 @@ Or trigger via the API (steps 2 and 3):
 curl -X POST -H "X-API-Key: $API_KEY" $BASE/api/legislation/fetch-texts
 curl -X POST -H "X-API-Key: $API_KEY" $BASE/api/legislation/vectorize  # requires admin scope
 ```
+
+## Database Backups and Restoration
+
+### Backing up
+
+```bash
+DATE=$(date +%Y-%m-%d)
+
+# MongoDB — export the legislation collection as gzipped JSONL
+mongoexport --db state_pulse --collection legislation \
+  | gzip > data/${DATE}_mongodb_legislation.jsonl.gz
+
+# PostgreSQL — dump the full database as gzipped SQL
+pg_dump state_pulse | gzip > data/${DATE}_postgres_export.sql.gz
+```
+
+### Restoring
+
+```bash
+# MongoDB — drop and reimport the legislation collection
+gunzip -c data/<date>_mongodb_legislation.jsonl.gz \
+  | mongoimport --db state_pulse --collection legislation --drop
+
+# PostgreSQL — create the database if needed, then restore
+createdb state_pulse 2>/dev/null || true
+gunzip -c data/<date>_postgres_export.sql.gz | psql state_pulse
+```
+
+The `data/` directory is gitignored. Backup files should be stored there or in a separate offsite location.
