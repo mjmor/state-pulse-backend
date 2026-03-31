@@ -22,13 +22,11 @@ logger = logging.getLogger(__name__)
 
 _API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-DATABASE_URL: str | None = os.environ.get("DATABASE_URL")
-
-
 def _get_conn():
-    if not DATABASE_URL:
+    url = os.environ.get("DATABASE_URL")
+    if not url:
         raise RuntimeError("DATABASE_URL is not set")
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg2.connect(url)
 
 
 def _hash_key(raw_key: str) -> str:
