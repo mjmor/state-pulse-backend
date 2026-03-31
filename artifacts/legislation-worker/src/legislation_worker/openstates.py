@@ -90,7 +90,7 @@ def fetch_bills(
 
             if updated_since is not None:
                 params["updated_since"] = (
-                    updated_since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    updated_since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
                 )
 
             if subject is not None:
