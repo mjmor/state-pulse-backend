@@ -6,35 +6,52 @@ Ingests US state legislation from the [OpenStates API](https://openstates.org/ap
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (package manager)
-- MongoDB 7+
-- PostgreSQL 16+ with the `pgvector` extension enabled
-- Redis 7+
+- MongoDB 7+ (macOS: `brew tap mongodb/brew && brew install mongodb-community`)
+- PostgreSQL 16+ with the `pgvector` extension enabled (macOS: `brew install postgresql@18`)
+- Redis 7+ (macOS: `brew install redis`)
 
 ## Setup
 
+### 1. Start services
+
+On macOS (Homebrew):
+
 ```bash
-# Install dependencies
+brew services start mongodb/brew/mongodb-community
+brew services start postgresql@18   # or whichever version you installed
+brew services start redis
+```
+
+> **Note:** Homebrew installs PostgreSQL binaries under `/opt/homebrew/opt/postgresql@<version>/bin/`. Add that directory to your `PATH`, or use full paths for `psql`, `createdb`, etc.
+
+### 2. Create the PostgreSQL database
+
+```bash
+createdb state_pulse
+```
+
+### 3. Install Python dependencies
+
+```bash
 cd artifacts/legislation-worker
 uv sync
 ```
+
+### 4. Configure environment variables
 
 Create a `.env` file in `artifacts/legislation-worker/` (or export variables in your shell):
 
 ```env
 OPENSTATES_API_KEY=your_key_here
-DATABASE_URL=postgresql://user:password@localhost:5432/state_pulse
+DATABASE_URL=postgresql://localhost/state_pulse
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DB=state_pulse
 REDIS_URL=redis://localhost:6379/0
 ```
 
-Enable the pgvector extension in PostgreSQL once:
+> On a local Homebrew PostgreSQL install there is no password by default — use `postgresql://localhost/state_pulse` (peer/trust auth). Add credentials only if your server requires them.
 
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-The `api_keys` and `bill_chunks` tables are created automatically when the API server starts.
+The `api_keys` and `bill_chunks` tables are created automatically when the API server starts (the `pgvector` extension is also enabled automatically).
 
 ## Environment Variables
 
@@ -54,23 +71,7 @@ The `api_keys` and `bill_chunks` tables are created automatically when the API s
 
 ## Running the Services
 
-Each service has a convenience shell script in `artifacts/legislation-worker/`. Run them in separate terminals (or use the Replit workflows if deployed there).
-
-```bash
-# 1. MongoDB
-bash artifacts/legislation-worker/run_mongodb.sh
-
-# 2. Redis
-bash artifacts/legislation-worker/run_redis.sh
-
-# 3. Celery worker + beat scheduler
-bash artifacts/legislation-worker/run_worker.sh
-
-# 4. FastAPI server (http://localhost:8001)
-bash artifacts/legislation-worker/run_api.sh
-```
-
-Or run directly with uv from `artifacts/legislation-worker/`:
+Run directly with uv from `artifacts/legislation-worker/`:
 
 ```bash
 # FastAPI server
